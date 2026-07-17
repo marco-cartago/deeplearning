@@ -4,7 +4,8 @@ import torch.optim as optim
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 
-from rnn_block import LinearRNN
+from src.models import TextRNN
+
 
 class TextDataset(Dataset):
     def __init__(self, data, seq_len):
@@ -19,32 +20,21 @@ class TextDataset(Dataset):
         y = self.data[idx + 1 : idx + self.seq_len + 1]
         return x, y
 
-class TextRNN(nn.Module):
-    def __init__(self, vocab_size, embed_size, hidden_size):
-        super().__init__()
-        self.embedding = nn.Embedding(vocab_size, embed_size)
-        self.rnn0 = LinearRNN(embed_size, hidden_size, batch_first=True)
-        self.fc0 = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
-            nn.GELU(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.GELU(),
-            nn.Linear(hidden_size, hidden_size)
-        )
-        self.rnn1 = LinearRNN(hidden_size, hidden_size, batch_first=True)
-        self.fc1 = nn.Linear(hidden_size, vocab_size)
 
-    def forward(self, x, h0=None):
-        x = self.embedding(x)
-        
-        out, hn = self.rnn0(x, h0)   # LRNN first pass
-        out = self.fc0(out)          # FC in the middle
-        out, hn = self.rnn1(out, hn) # LRNN second pass
-        
-        logits = self.fc1(out)
-        return logits, hn
 
-def generate(model, int_to_char, char_to_int, start_str=" ", length=16):
+def generate(
+    model: nn.Module, 
+    int_to_char: dict[int, str], 
+    char_to_int: dict[str, int], 
+    start_str:str = " ", 
+    length: int = 64, 
+    temperature:float =1.0
+) -> str:
+    """
+    Given a sequence model iteratively generates a sequence from the model.
+    Assumes that the model outputs (y, m) = model(x) where y are the outputs
+    for a particular item in the sequence. 
+    """
     model.eval()
     chars_out = list(start_str)
     input_seq = torch.tensor([char_to_int[c] for c in start_str]).unsqueeze(0)
@@ -52,23 +42,29 @@ def generate(model, int_to_char, char_to_int, start_str=" ", length=16):
     with torch.no_grad():
         for _ in range(length):
             logits, _ = model(input_seq)
-            last_logit = logits[0, -1, :]
-            next_char_id = torch.argmax(last_logit).item()
+            last_logit = logits[0, -1, :] / temperature
+            
+            # Sample from the distribution
+            probs = torch.softmax(last_logit, dim=-1)
+            next_char_id = torch.multinomial(probs, 1).item()
+            
             chars_out.append(int_to_char[next_char_id])
-            input_seq = torch.cat([input_seq[:, 1:], torch.tensor([[next_char_id]])], dim=1)
+            input_seq = torch.cat(
+                [input_seq[:, 1:], torch.tensor([[next_char_id]])], 
+                dim=1
+            )
             
     return "".join(chars_out)
 
 
-def main():
 
+def main():
     with open("dataset.txt", "r", encoding="utf-8") as f:
         text = f.read()
 
-
-    seq_len = 16 
-    batch_size = 32 
-    embed_size = 30 
+    seq_len     = 64
+    batch_size  = 32 
+    embed_size  = 30 
     hidden_size = 64
 
     chars = sorted(list(set(text)))
@@ -82,28 +78,23 @@ def main():
 
     model = TextRNN(vocab_size, embed_size, hidden_size)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-3)
 
-    for epoch in range(2):
+    for epoch in range(25):
         model.train()
         total_loss = 0
-        for x, y in tqdm(loader):
-
+        for (x, y) in tqdm(loader):
             optimizer.zero_grad()
             logits, _ = model(x)
-            
-            # Reshape for CrossEntropyLoss: (batch * seq, vocab)
             loss = criterion(logits.view(-1, vocab_size), y.view(-1))
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-        
-        model.eval()
-        
+
+        print(f"\"{generate(model, int_to_char, char_to_int, start_str=".")}\"")
+            
         print(f"Epoch {epoch+1}, Loss: {total_loss/len(loader):.4f}")
     
-    print(f"\"{generate(model, int_to_char, char_to_int,  start_str="")}\"")
-
-
+   
 if __name__ == "__main__":
     main()

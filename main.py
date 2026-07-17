@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 
-from rnn_block import *
+from src.rnn_block import *
 
 def main():
 

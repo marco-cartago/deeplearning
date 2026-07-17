@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # A custom recurrent neural network
 class GRLU(nn.Module):
@@ -140,3 +139,41 @@ class LinearRNN(nn.Module):
             output = output.transpose(0, 1)
 
         return output, hn
+
+
+class TextRNN(nn.Module):
+
+    def __init__(self, vocab_size, embed_size, hidden_size):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_size)
+
+        self.rnn0 = LinearRNN(embed_size, hidden_size, batch_first=True)
+        self.fc0 = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.GELU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.GELU(),
+            nn.Linear(hidden_size, hidden_size)
+        )
+        self.rnn1 = LinearRNN(hidden_size, hidden_size, batch_first=True)
+        self.fc1 = nn.Linear(hidden_size, vocab_size)
+
+    def forward(self, x, h0=None):
+        
+        # Embed the input
+        x = self.embedding(x)
+        
+        # LRNN first pass
+        x_res, _ = self.rnn0(x, h0)     
+        x = x + x_res
+        
+        # FC in the middle
+        x = x + self.fc0(x)
+
+        # LRNN second pass
+        x, hn = self.rnn1(x)  
+        
+        logits = self.fc1(x)
+        
+        return logits, hn
+
