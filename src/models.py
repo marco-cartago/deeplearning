@@ -164,8 +164,7 @@ class TextRNN(nn.Module):
         x = self.embedding(x)
         
         # LRNN first pass
-        x_res, _ = self.rnn0(x, h0)     
-        x = x + x_res
+        x, hn = self.rnn0(x, h0)     
         
         # FC in the middle
         x = x + self.fc0(x)
