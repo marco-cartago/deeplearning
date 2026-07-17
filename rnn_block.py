@@ -87,3 +87,57 @@ class CharLSTM(nn.Module):
             torch.zeros(self.num_layers, batch_size, self.hidden_size).to(DEVICE)
         )
 
+
+class LinearRNN(nn.Module):
+    def __init__(self, input_size, hidden_size, bias=True, batch_first=False):
+        super(LinearRNN, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.batch_first = batch_first
+
+        # Weights for input-to-hidden and hidden-to-hidden transitions
+        self.weight_ih = nn.Parameter(torch.empty(hidden_size, input_size))
+        self.weight_hh = nn.Parameter(torch.empty(hidden_size, hidden_size))
+        self._initialize_w_mat()
+
+        if bias:
+            self.bias = nn.Parameter(torch.zeros(hidden_size))
+        else:
+            self.register_parameter('bias', None)
+
+    def _initialize_w_mat(self):
+        """Initializes the embedding matrix to be orthogonal, so that the eigenvalues of the transformation are initially one."""
+        nn.init.orthogonal_(self.weight_hh)
+        nn.init.xavier_uniform_(self.weight_ih)
+
+    def forward(self, x: torch.Tensor, h0: torch.Tensor | None = None):
+        """Expects x as shape (seq_len, batch, input_size) or (batch, seq_len, input_size)"""
+        if self.batch_first:
+            x = x.transpose(0, 1)
+
+        seq_len, batch_size, _ = x.size()
+        
+        if h0 is None:
+            h = torch.zeros(1, batch_size, self.hidden_size, device=x.device)
+        else:
+            h = h0[0] if isinstance(h0, tuple) else h0
+
+        # Linear recurrence
+        outputs = []
+        for t in range(seq_len):
+            h = torch.matmul(x[t], self.weight_ih.t()) + \
+                torch.matmul(h[-1], self.weight_hh.t())
+            
+            if self.bias is not None:
+                h = h + self.bias
+
+            outputs.append(h.unsqueeze(0))
+
+        output = torch.cat(outputs, dim=0)
+        hn = h.unsqueeze(0)
+
+        if self.batch_first:
+            output = output.transpose(0, 1)
+
+        # Return (output, hn)
+        return output, hn
