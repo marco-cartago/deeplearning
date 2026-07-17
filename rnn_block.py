@@ -139,5 +139,4 @@ class LinearRNN(nn.Module):
         if self.batch_first:
             output = output.transpose(0, 1)
 
-        # Return (output, hn)
         return output, hn
