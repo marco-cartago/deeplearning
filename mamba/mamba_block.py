@@ -6,29 +6,50 @@ import math
 class MambaConfig:
     def __init__(
         self, 
-        vocab_size=0,        # Size of the tokenizer vocabulary (needed for embedding + LM head)
-        d_model=256,       # Input/Output dimension of the block
+        vocab_size=0,      # Size of the tokenizer vocabulary (needed for embedding + LM head)
+        d_model=256,       # Input/Output dimension of the block (size of the embedding)
         d_state=16,        # Latent state dimension (N in the paper)
-        expand=2,          # Expansion factor (E in the paper)
+        expand_factor=2,   # Expansion factor (E in the paper)
         d_conv=4,          # Width of the 1D causal convolution
-        dt_rank: int | str ="auto",     # Rank for the step size projection
+        dt_rank: int | str ="auto",     # Rank for the step size projection (R in the paper)
         n_layers=8,
-        mlp_expand=4,
-        norm_eps=1e-5,
-        pad_token_id=None  # Used as padding_idx for the embedding layer  
+        norm_eps=1e-5,  
     ):
+        """Configuration class for different Mamba components.
+
+        Attributes
+        ----------
+        vocab_size: int
+            Size of the tokenizer's vocabulary.
+        d_model: int
+            Number of features (size of the embedding in language models).
+            D in the paper.
+        d_state: int
+            Size of the state space for a single feature. N in the paper.
+            Total state-space size is D*N.
+        expand_factor: int
+            Expansion factor of the embedding size. E in the paper.
+            Real size of the sequence before SSM is D*E.
+        d_conv: int
+            Small contextual convolution before the transformation.
+        dt_rank: int | str
+            Rank of a low rank linear projection of a sequence element to the Δ parameter.
+            R in the paper.
+        n_layers: int
+            Depth of the Neural Network.
+        norm_eps: float
+            Epsilon for LayerNorm in case of zero variance layers.
+        """
         self.vocab_size = vocab_size
 
         self.d_model = d_model
         self.d_state = d_state
-        self.expand = expand
-        self.d_inner = int(expand * d_model) # Dimension inside the block (D)
+        self.expand_factor = expand_factor
+        self.d_inner = int(expand_factor * d_model) # Dimension inside the block (D*E)
         self.d_conv = d_conv
 
         self.n_layers = n_layers
-        self.mlp_expand = mlp_expand
         self.norm_eps = norm_eps
-        self.pad_token_id = pad_token_id
         
         # dt_rank is typically ceil(d_model / 16)
         if dt_rank == "auto":
@@ -39,7 +60,7 @@ class MambaConfig:
             self.dt_rank = dt_rank
 
 
-class ExplicitSelectiveSSM(nn.Module):
+class SelectiveSSM(nn.Module):
     def __init__(self, config: MambaConfig):
         super().__init__()
         self.config = config
@@ -68,7 +89,6 @@ class ExplicitSelectiveSSM(nn.Module):
         )
         
         # B and C projections. They project from the input to the state dimension.
-        # self.x_proj = nn.Linear(d_inner, d_state * 2, bias=False)
         self.B_proj = nn.Linear(d_inner, d_state, bias=False)
         self.C_proj = nn.Linear(d_inner, d_state, bias=False)
 
@@ -160,7 +180,7 @@ class MambaBlock(nn.Module):
         )
 
         # 3. The Selective State Space Model
-        self.ssm = ExplicitSelectiveSSM(config)
+        self.ssm = SelectiveSSM(config)
 
         # 4. Output Projection: Compresses back to d_model
         self.out_proj = nn.Linear(d_inner, d_model, bias=False)
@@ -216,17 +236,3 @@ class RMSNorm(nn.Module):
         # Normalizzazione
         x_normed = x * torch.rsqrt(variance + self.eps)
         return self.weight * x_normed
-
-
-class MLP(nn.Module):
-    def __init__(self, config: MambaConfig):
-        super().__init__()
-        hidden_dim = int(config.d_model * config.mlp_expand)
-        
-        # Proiezione verso l'alto, attivazione non lineare (SiLU), proiezione verso il basso
-        self.fc1 = nn.Linear(config.d_model, hidden_dim, bias=False)
-        self.act = nn.SiLU()
-        self.fc2 = nn.Linear(hidden_dim, config.d_model, bias=False)
-
-    def forward(self, x):
-        return self.fc2(self.act(self.fc1(x)))

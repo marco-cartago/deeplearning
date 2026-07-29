@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from mamba import MambaConfig, MambaBlock, RMSNorm, MLP
+from mamba import MambaConfig, MambaBlock, RMSNorm
 
 
 class MambaLayer(nn.Module):
@@ -14,7 +14,6 @@ class MambaLayer(nn.Module):
         
         # Normalizzazione prima del blocco MLP
         self.norm2 = RMSNorm(config.d_model, eps=config.norm_eps)
-        self.mlp = MLP(config)
 
     def forward(self, x):
         """
@@ -29,7 +28,6 @@ class MambaLayer(nn.Module):
         # Ramo MLP con connessione residuale (Pre-Norm)
         residual = x
         x = self.norm2(x)
-        x = self.mlp(x)
         x = x + residual
         
         return x
@@ -46,7 +44,7 @@ class Mamba(nn.Module):
         ])
         
         # Normalizzazione finale prima dell'output (standard per i decoder-only)
-        self.final_norm = RMSNorm(config.d_model, eps=config.norm_eps)
+        # self.final_norm = RMSNorm(config.d_model, eps=config.norm_eps)
 
     def forward(self, x):
         """
@@ -58,7 +56,7 @@ class Mamba(nn.Module):
             x = layer(x)
             
         # Applica la normalizzazione finale sulle features estratte
-        x = self.final_norm(x)
+        # x = self.final_norm(x)
         return x
     
 
@@ -77,7 +75,7 @@ class MambaForCausalLM(nn.Module):
         super().__init__()
         self.config = config
         self.embedding = nn.Embedding(
-            config.vocab_size, config.d_model, padding_idx=config.pad_token_id
+            config.vocab_size, config.d_model
         )
         self.backbone = Mamba(config)
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)

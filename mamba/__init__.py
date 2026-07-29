@@ -1,7 +1,6 @@
 from .mamba_block import (
     MambaConfig,
     MambaBlock,
-    RMSNorm,
-    MLP
+    RMSNorm
 )
 from .mamba_ssm import Mamba, MambaForCausalLM
