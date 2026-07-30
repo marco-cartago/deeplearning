@@ -1,19 +1,23 @@
+import json
+import math
+import string
+from typing import Any, Self
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 
 class MambaConfig:
     def __init__(
         self, 
         vocab_size=0,      # Size of the tokenizer vocabulary (needed for embedding + LM head)
-        d_model=256,       # Input/Output dimension of the block (size of the embedding)
-        d_state=16,        # Latent state dimension (N in the paper)
-        expand_factor=2,   # Expansion factor (E in the paper)
+        d_model=128,       # Input/Output dimension of the block (size of the embedding)
+        d_state=8,        # Latent state dimension (N in the paper)
+        expand_factor=2.,   # Expansion factor (E in the paper)
         d_conv=4,          # Width of the 1D causal convolution
         dt_rank: int | str ="auto",     # Rank for the step size projection (R in the paper)
-        n_layers=8,
-        norm_eps=1e-5,  
+        n_layers=4,
+        norm_eps=1e-4,  
     ):
         """Configuration class for different Mamba components.
 
@@ -58,6 +62,38 @@ class MambaConfig:
             if not isinstance(dt_rank, int):
                 raise ValueError("'dt_rank' must be either int or 'auto'.")
             self.dt_rank = dt_rank
+
+    @classmethod
+    def from_config_json(cls, file: str) -> Self:
+        """Alternative constructor of MambaConfig from a json configuration file."""
+        with open(file, 'r') as f:
+            config: dict[str, Any] = json.load(f)
+        charset_file = config.get('charset')
+        if not charset_file:
+            charset = string.printable[:-3]
+        else:
+            with open(charset_file, 'r') as cf:
+                charset = sorted(set(cf.read()))
+        vocab_size = len(charset)
+        d_model: int = config.get('d_model', 128)
+        d_state: int = config.get('d_state', 8)
+        expand_factor: float = config.get('expand_factor', 2.)
+        d_conv: int = config.get('d_conv', 4)
+        dt_rank: int | str = config.get('dt_rank', 'auto')
+        n_layers: int = config.get('n_layers', 4)
+        norm_eps: float = config.get('norm_eps', 1e-4)
+
+        return cls(
+            vocab_size,
+            d_model,
+            d_state,
+            expand_factor,
+            d_conv,
+            dt_rank,
+            n_layers,
+            norm_eps
+        )
+
 
 
 class SelectiveSSM(nn.Module):
