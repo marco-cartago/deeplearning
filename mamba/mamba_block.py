@@ -34,7 +34,7 @@ class MambaConfig:
             Small contextual convolution before the transformation.
         dt_rank: int | str
             Rank of a low rank linear projection of a sequence element to the Δ parameter.
-            R in the paper.
+            R in the paper. `dt_rank`='auto' is R = D/16 rounded up.
         n_layers: int
             Depth of the Neural Network.
         norm_eps: float
