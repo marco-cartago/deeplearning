@@ -10,7 +10,7 @@ import torch.nn.functional as F
 class MambaConfig:
     def __init__(
         self, 
-        vocab_size=0,      # Size of the tokenizer vocabulary (needed for embedding + LM head)
+        vocab_size=len(string.printable[:-3]),      # Size of the tokenizer vocabulary (needed for embedding + LM head)
         d_model=128,       # Input/Output dimension of the block (size of the embedding)
         d_state=8,        # Latent state dimension (N in the paper)
         expand_factor=2.,   # Expansion factor (E in the paper)
@@ -18,6 +18,7 @@ class MambaConfig:
         dt_rank: int | str ="auto",     # Rank for the step size projection (R in the paper)
         n_layers=4,
         norm_eps=1e-4,  
+        charset_file: str | None = None
     ):
         """Configuration class for different Mamba components.
 
@@ -54,6 +55,8 @@ class MambaConfig:
 
         self.n_layers = n_layers
         self.norm_eps = norm_eps
+
+        self.charset_file = charset_file
         
         # dt_rank is typically ceil(d_model / 16)
         if dt_rank == "auto":
@@ -72,8 +75,8 @@ class MambaConfig:
         if not charset_file:
             charset = string.printable[:-3]
         else:
-            with open(charset_file, 'r') as cf:
-                charset = sorted(set(cf.read()))
+            with open(charset_file, 'r', encoding='utf-8') as cf:
+                charset = cf.read()
         vocab_size = len(charset)
         d_model: int = config.get('d_model', 128)
         d_state: int = config.get('d_state', 8)
@@ -91,7 +94,8 @@ class MambaConfig:
             d_conv,
             dt_rank,
             n_layers,
-            norm_eps
+            norm_eps,
+            charset_file
         )
 
 

@@ -1,6 +1,11 @@
+import string
+
 import torch
 
-def get_charset(charset_file: str) -> list[str]:
+def get_charset(charset_file: str | None = None) -> list[str]:
+    if not charset_file:
+        return sorted(set(string.printable[:-3]))
+    
     with open(charset_file, "r", encoding="utf-8") as f:
         raw_data = f.read()
     tokens = sorted(set(raw_data))
@@ -17,7 +22,7 @@ def auto_format(text: str) -> str:
     like double spaces or double newlines"""
     new_text = text.replace('  ', ' ')
     new_text = new_text.replace('\n\n', '\n')
-    transl_table = new_text.maketrans("“”’", "\"\"'")
+    transl_table = new_text.maketrans("«»“”‘’", "\"\"\"\"''")
     new_text = new_text.translate(transl_table)
     return new_text
 

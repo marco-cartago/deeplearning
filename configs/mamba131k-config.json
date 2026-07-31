@@ -1,4 +1,5 @@
 {
+    "charset": "dictionaries/latin1-charset.txt",
     "d_model": 128,
     "d_state": 8,
     "expand_factor": 2.0,
