@@ -32,6 +32,23 @@ class MambaLayer(nn.Module):
         
         return x
 
+    def step(self, x: torch.Tensor, 
+             cache: tuple[torch.Tensor, torch.Tensor]) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+        conv_state, ssm_state = cache
+        
+        # Ramo SSM con connessione residuale (Pre-Norm)
+        residual = x
+        x = self.norm1(x)
+        x, conv_state, ssm_state = self.ssm.step(x, conv_state, ssm_state)
+        x = x + residual
+        
+        # Ramo MLP con connessione residuale (Pre-Norm)
+        residual = x
+        x = self.norm2(x)
+        x = x + residual
+        
+        return x, (conv_state, ssm_state)
+
 
 class Mamba(nn.Module):
     def __init__(self, config: MambaConfig):
@@ -58,6 +75,13 @@ class Mamba(nn.Module):
         # Applica la normalizzazione finale sulle features estratte
         # x = self.final_norm(x)
         return x
+
+    def step(self, x: torch.Tensor, caches: list[tuple[torch.Tensor, torch.Tensor]]) -> tuple[torch.Tensor, list[tuple[torch.Tensor, torch.Tensor]]]:
+        new_caches = []
+        for i, layer in enumerate(self.layers):
+            x, new_cache = layer.step(x, caches[i]) # type: ignore[operator]
+            new_caches.append(new_cache)
+        return x, new_caches
     
 
 class MambaForCausalLM(nn.Module):
@@ -95,3 +119,27 @@ class MambaForCausalLM(nn.Module):
         x = self.backbone(x)
         logits = self.lm_head(x)
         return logits
+
+    def allocate_caches(self, 
+                        batch_size: int, 
+                        device: str | torch.device) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        """Inizializza a zero gli stati di Convoluzione e SSM per tutti i layer."""
+        caches = []
+        for _ in range(self.config.n_layers):
+            conv_state = torch.zeros(batch_size, self.config.d_inner, self.config.d_conv, device=device)
+            ssm_state = torch.zeros(batch_size, self.config.d_inner, self.config.d_state, device=device)
+            caches.append((conv_state, ssm_state))
+        return caches
+
+    def step(self, input_id: torch.Tensor, caches: list[tuple[torch.Tensor, torch.Tensor]]) -> tuple[torch.Tensor, list]:
+        """
+        input_id shape: (Batch,) oppure (Batch, 1)
+        Restituisce i logits per il singolo token successivo e le nuove cache.
+        """
+        x = self.embedding(input_id)
+        if x.dim() == 3: # Se è passata un'extra dim per Sequence_Length=1, la rimuoviamo
+            x = x.squeeze(1)
+            
+        x, new_caches = self.backbone.step(x, caches)
+        logits = self.lm_head(x) # (Batch, vocab_size)
+        return logits, new_caches

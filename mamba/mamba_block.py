@@ -194,6 +194,55 @@ class SelectiveSSM(nn.Module):
         
         # Add the skip connection and return
         return y + (x * self.D)
+
+    def step(self, xt: torch.Tensor, h: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Passo di inferenza autoregressivo per un singolo token.
+        
+        Args:
+            xt: Input al timestep corrente. Shape: (Batch, d_inner)
+            h:  Stato nascosto del timestep precedente. Shape: (Batch, d_inner, d_state)
+                Se None, viene inizializzato a zeri.
+                
+        Returns:
+            yt: Output per il timestep corrente. Shape: (Batch, d_inner)
+            h:  Stato nascosto aggiornato da salvare in cache. Shape: (Batch, d_inner, d_state)
+        """
+        batch_size, d_inner = xt.shape
+        device = xt.device
+
+        # 1. Inizializzazione dello stato se è il primo token della generazione
+        if h is None:
+            h = torch.zeros(batch_size, d_inner, self.config.d_state, device=device)
+
+        # 2. Matrice A costante
+        A = -torch.exp(self.A_log.float())  # Shape: (d_inner, d_state)
+
+        # 3. Parametri dipendenti dal token corrente (xt)
+        dt = self.dt_proj(xt)               # (Batch, d_inner)
+        dt = F.softplus(dt)                 # Garantisce che il passo temporale sia positivo
+
+        bt = self.B_proj(xt)                # (Batch, d_state)
+        ct = self.C_proj(xt)                # (Batch, d_state)
+
+        # 4. Discretizzazione ZOH per il singolo timestep
+        # dA: (Batch, d_inner, d_state)
+        dA = torch.exp(dt.unsqueeze(-1) * A.unsqueeze(0))
+        
+        # dB: (Batch, d_inner, d_state)
+        dB = dt.unsqueeze(-1) * bt.unsqueeze(1)
+
+        # 5. Aggiornamento dello Stato Nascosto: h_t = dA * h_{t-1} + dB * x_t
+        h = dA * h + dB * xt.unsqueeze(-1)
+
+        # 6. Calcolo dell'Output: y_t = sum(h_t * C_t, dim=-1)
+        yt = (h * ct.unsqueeze(1)).sum(dim=-1)  # (Batch, d_inner)
+
+        # 7. Applicazione della Skip Connection D
+        yt = yt + (xt * self.D)
+        assert h is not None, "h at this point should be a tensor."
+        return yt, h
+
     
 
 class MambaBlock(nn.Module):
@@ -261,6 +310,43 @@ class MambaBlock(nn.Module):
         out = self.out_proj(x_combined)
         
         return out
+
+    def step(self, x: torch.Tensor, 
+             conv_state: torch.Tensor, 
+             ssm_state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            """
+            x: (Batch, d_model)
+            conv_state: (Batch, d_inner, d_conv)
+            ssm_state: (Batch, d_inner, d_state)
+            """
+            # 1. Input Projection
+            x_proj = self.in_proj(x)
+            x_main, x_gate = x_proj.chunk(2, dim=-1) # (Batch, d_inner)
+
+            # 2. Convoluzione Causale 1D step-by-step
+            # Shift a sinistra dello stato della convoluzione e inserimento del nuovo token a destra
+            conv_state = torch.roll(conv_state, shifts=-1, dims=-1)
+            conv_state[:, :, -1] = x_main
+            
+            # Calcolo manuale della convoluzione depthwise sul buffer corrente
+            # self.conv1d.weight ha shape (d_inner, 1, d_conv), squeeze in (d_inner, d_conv)
+            x_main = torch.sum(conv_state * self.conv1d.weight.squeeze(1), dim=-1)
+            if self.conv1d.bias is not None:
+                x_main = x_main + self.conv1d.bias
+                
+            x_main = F.silu(x_main)
+
+            # 3. Step dell'SSM
+            x_main, ssm_state = self.ssm.step(x_main, ssm_state)
+
+            # 4. Gating
+            x_gate = F.silu(x_gate)
+            x_combined = x_main * x_gate
+
+            # 5. Output Projection
+            out = self.out_proj(x_combined)
+            
+            return out, conv_state, ssm_state
 
 
 class RMSNorm(nn.Module):

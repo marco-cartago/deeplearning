@@ -20,11 +20,24 @@ def decode(ids, id_to_token: dict[int, str]) -> str:
 def auto_format(text: str) -> str:
     """Preprocess text in order to avoid things 
     like double spaces or double newlines"""
-    new_text = text.replace('  ', ' ')
-    new_text = new_text.replace('\n\n', '\n')
+    new_text = text
+    # new_text = text.replace('  ', ' ')
+    # new_text = new_text.replace('\n\n', '\n')
     transl_table = new_text.maketrans("«»“”‘’", "\"\"\"\"''")
     new_text = new_text.translate(transl_table)
     return new_text
+
+def preprocess_data(doc_path: str, 
+                tokens: list[str] | None = None) -> torch.Tensor:
+    if not tokens:
+        tokens = sorted(set(string.printable[:-3]))
+    token_to_id = {el: i for i, el in enumerate(tokens)}
+
+    with open(doc_path, "r", encoding="utf-8") as f:
+        raw_data = f.read()
+    data = auto_format(raw_data)
+
+    return encode(data, token_to_id)
 
 if __name__ == '__main__':
     # import pprint
@@ -39,4 +52,7 @@ if __name__ == '__main__':
     print("\nID2Token:")
     # pprint.pp(id_to_token)
     print("Example of decoding: [33,34,35] ->", decode([33,34,35], id_to_token))
+
+
+
     

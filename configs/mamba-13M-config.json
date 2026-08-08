@@ -1,0 +1,8 @@
+{
+    "charset": "dictionaries/dante-latin1-charset.txt",
+    "d_model": 512,
+    "d_state": 16,
+    "expand_factor": 2.5,
+    "d_conv": 6,
+    "n_layers": 8
+}

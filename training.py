@@ -1,15 +1,11 @@
-import json
 import sys, getopt
 import string
-from typing import Any
 
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import tqdm
 
 from mamba import MambaConfig, MambaForCausalLM
-from lmtools import get_charset, encode, decode, auto_format
+from lmtools import get_charset, encode, decode, auto_format, preprocess_data
 
 CONFIG: str | None = None
 
@@ -36,19 +32,6 @@ def get_batch(data: torch.Tensor, context_len: int, batch_size: int):
     return x, y
 
 
-def preprocess_data(doc_path: str, 
-                    tokens: list[str] | None = None) -> torch.Tensor:
-    if not tokens:
-        tokens = sorted(set(string.printable[:-3]))
-    token_to_id = {el: i for i, el in enumerate(tokens)}
-
-    with open(doc_path, "r", encoding="utf-8") as f:
-        raw_data = f.read()
-    data = auto_format(raw_data)
-
-    return encode(data, token_to_id) 
-
-
 def train_loop(config: MambaConfig, encoded_data: torch.Tensor, 
                epochs=EPOCHS,
                batch_size=BATCH_SIZE,
@@ -58,10 +41,18 @@ def train_loop(config: MambaConfig, encoded_data: torch.Tensor,
         model.load_state_dict(torch.load(pretrained_path))
     loss = torch.nn.CrossEntropyLoss()
     optim = torch.optim.AdamW(model.parameters(), lr = lr)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optim, "min", 
+        patience=5,
+        factor=0.75,
+        min_lr=5e-7, 
+        threshold=5e-3, 
+        cooldown=2
+    )
 
     model.to(DEVICE)
     model.train()
-    loss_vals = [0.]*epochs
+    # loss_vals = [0.]*epochs
     pbar = tqdm.trange(epochs, leave=True, dynamic_ncols=True)
     for i in pbar:
         # training loop
@@ -69,11 +60,13 @@ def train_loop(config: MambaConfig, encoded_data: torch.Tensor,
         logits = model(x)
         B, T, C = logits.shape
         loss_val = loss(logits.view(B*T, C), y.view(-1))
-        loss_vals[i] = loss_val.item()
+        # loss_vals[i] = loss_val.item()
         optim.zero_grad()
         loss_val.backward()
         optim.step()
-        pbar.set_postfix({"Loss": f"{loss_val.item():.3f}"})
+        scheduler.step(metrics=loss_val.item())
+        current_lr = scheduler.get_last_lr()[0] # optim.param_groups[0]['lr']
+        pbar.set_postfix({"Loss": f"{loss_val.item():.3f}", "lr": f"{current_lr:.2e}"})
     return model
 
 
@@ -85,7 +78,7 @@ if __name__ == '__main__':
     arguments, values = getopt.getopt(args, options, long_options)
     for arg, val in arguments:
         if arg in ('-L', "--context_len"):
-            L = int(val)
+            L = CONTEXT_LEN = int(val)
         elif arg in ('-c', "--config"):
             CONFIG = val
         elif arg in ('-e', "--epochs"):
@@ -96,6 +89,8 @@ if __name__ == '__main__':
             text_file = val
         elif arg in ('-p', "--pretrained"):
             PRETRAINED_PATH = val
+        elif arg in ('-B', "--batch"):
+            BATCH_SIZE = int(val)
         else:
             raise getopt.GetoptError(
                 f"Unknown argument. Valid arguments are\n"
@@ -103,7 +98,8 @@ if __name__ == '__main__':
                 f"-f, --file\n"
                 f"-L, --context_len\n"
                 f"-e, --epochs\n"
-                f"-B, --batch.",
+                f"-B, --batch\n"
+                f"--lr",
                 opt=str(val)
             )
         
@@ -122,7 +118,7 @@ if __name__ == '__main__':
         D = config.d_model,
         E = config.expand_factor,
         N = config.d_state,
-        d = config.n_layers
+        d = config.n_layers,
     )
     torch.save(model.state_dict(), f"pretrained/{model_name}.pth")
 
@@ -145,7 +141,7 @@ if __name__ == '__main__':
     sf = torch.nn.Softmax(dim=-1)
 
     # 3. Quanti nuovi token generare (es. 200 token)
-    GENERATE_TOKENS = 200
+    GENERATE_TOKENS = 128
 
     model.eval()
     with torch.no_grad():  # Disabilita il tracciamento dei gradienti durante l'inferenza
