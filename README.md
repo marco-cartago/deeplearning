@@ -45,7 +45,7 @@ Marco Cartago, Alessandro Longato and Giovanni Zedda
 
 MSc students in Data Science and Artificial Intelligence 
 
-University of Trieste, July 2026
+University of Trieste, September 2026
 
 ---
 Copyright (c) 2026 M. Cartago, A. Longato, G. Zedda
