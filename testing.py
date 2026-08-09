@@ -2,12 +2,20 @@ import sys, getopt
 import time
 from typing import Any
 
+import matplotlib.pyplot as plt
+import numpy as np
+
 import torch
+import torch.nn.functional as F
 
 from mamba import MambaConfig, MambaForCausalLM
 from lmtools import get_charset, encode, decode, auto_format, preprocess_data
 
 T = TEMPERATURE = 1.0
+TOP_K = 0
+TOP_P = 1.0
+REPETITION_PENALTY = 1.0
+
 CONFIG: str | None = None
 PRETRAINED_PATH: str | None = None
 NUM_TOKENS: int = 100
@@ -106,15 +114,167 @@ def smart_generate_text(model: MambaForCausalLM, prompt_file: str = 'data/prompt
         "elapsed_time": t1-t0
     }
 
-    print("\n--- Testo Generato ---")
-    print(generated_text)
+
+def apply_top_k_top_p(logits: torch.Tensor, 
+                      top_k: int = 0, 
+                      top_p: float = 0.0, 
+                      filter_value: float = -float('Inf')) -> torch.Tensor:
+    """
+    Filtra i logits usando Top-K e/o Top-P (Nucleus) sampling.
+    logits shape: (Batch, vocab_size)
+    """
+    logits = logits.clone()
+    
+    # 1. Applicazione Top-K
+    if top_k > 0:
+        top_k = min(top_k, logits.size(-1))
+        # Trova il valore del K-esimo logit più grande
+        k_th_value = torch.topk(logits, top_k)[0][..., -1, None]
+        # Maschera tutti i logits inferiori al K-esimo valore
+        indices_to_remove = logits < k_th_value
+        logits[indices_to_remove] = filter_value
+
+    # 2. Applicazione Top-P (Nucleus)
+    if top_p > 0.0 and top_p < 1.0:
+        sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
+        sorted_probs = F.softmax(sorted_logits, dim=-1)
+        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+
+        # Rimuove i token con probabilità cumulativa superiore a top_p
+        sorted_indices_to_remove = cumulative_probs > top_p
+        
+        # Mantiene almeno il primo token spostando la maschera di 1 a destra
+        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+        sorted_indices_to_remove[..., 0] = False
+
+        # Ripristina l'ordinamento originale delle maschere da rimuovere
+        indices_to_remove = sorted_indices_to_remove.scatter(-1, sorted_indices, sorted_indices_to_remove)
+        logits[indices_to_remove] = filter_value
+
+    return logits
+
+
+@torch.no_grad()
+def ultrasmart_generate_text(
+    model: MambaForCausalLM, 
+    prompt_file: str = 'data/prompt.txt', 
+    num_tokens: int = 100, 
+    temperature: float = 1.0,
+    top_k: int = 20,
+    top_p: float = 0.95,
+    repetition_penalty: float = 1.0
+) -> dict[str, Any]:
+    
+    if temperature < 1e-8:
+        raise ValueError("Argument `temperature` must be strictly positive.")
+    
+    tokens = get_charset(model.config.charset_file)
+    prompt_tensor = preprocess_data(prompt_file, tokens=tokens)
+    prompt_ids = prompt_tensor.unsqueeze(0).to(DEVICE)  # Shape: [1, seq_len]
+    
+    batch_size, seq_len = prompt_ids.shape
+    id_to_token = {i: el for i, el in enumerate(tokens)}
+    sf = torch.nn.Softmax(dim=-1)
+    
+    model.eval()
+    
+    # 1. Inizializziamo le cache per lo stato conv e ssm di tutta la rete
+    caches = model.allocate_caches(batch_size, DEVICE)
+    
+    # 2. Phase 1: PREFILL
+    # Elaboriamo il prompt iniziale per popolare le cache con il contesto storico
+    for t in range(seq_len - 1):
+        input_id = prompt_ids[:, t]
+        _, caches = model.step(input_id, caches)
+        
+    # L'ultimo token del prompt è il punto di partenza per la generazione 
+    current_token = prompt_ids[:, -1]
+    generated_ids = prompt_ids[0].cpu().tolist()
+    
+    # 3. Phase 2: GENERAZIONE
+    t0 = time.perf_counter()
+    for _ in range(num_tokens):
+        # Passaggio forward su un SINGOLO token
+        logits, caches = model.step(current_token, caches) # Shape: (1, vocab_size)
+        
+        # # A. Applica la Repetition Penalty se attivata (> 1.0)
+        if repetition_penalty != 1.0:
+            # Prende i token unici recenti per evitare loop
+            recent_tokens = set(generated_ids[-3:]) # Guarda gli ultimi 30 token generati
+            for token_id in recent_tokens:
+                if logits[0, token_id] < 0:
+                    logits[0, token_id] *= repetition_penalty
+                else:
+                    logits[0, token_id] /= repetition_penalty
+
+        # B. Applica la Temperatura
+        logits = logits / temperature
+        
+        # C. Applica il filtro Top-K e Top-P
+        filtered_logits = apply_top_k_top_p(logits, top_k=top_k, top_p=top_p)
+        
+        # D. Calcolo probabilità e sampling
+        probs = sf(filtered_logits)
+        next_token = torch.multinomial(probs, num_samples=1)  # Shape: [1, 1]
+        
+        # Aggiornamento token corrente e storico
+        generated_ids.append(next_token.item())
+        current_token = next_token.squeeze(-1) # Shape: [1,]
+        
+    t1 = time.perf_counter()
+    generated_text = decode(generated_ids, id_to_token)
+
+    return {
+        "text": generated_text,
+        "elapsed_time": t1 - t0
+    }
+
+
+
+def plot_speed(model: MambaForCausalLM,
+               lengths: tuple[int,...], 
+               rep: int = 5, 
+               scale: str = 'log-log',
+               path: str = 'figures/generation_time.png'):
+    assert scale in ('log-log', 'lin-lin', 'log-lin', 'lin-log'), "Invalid scale."
+    avg_times = []
+    stddev_times = []
+    for l in lengths:
+        times = np.zeros(rep)
+        for r in range(rep):
+            output = smart_generate_text(model, num_tokens=l)
+            times[r] = output['elapsed_time']
+        avg_times.append(times.mean())
+        stddev_times.append(times.std(ddof=1) if rep > 1 else 0.)
+
+    # plt.plot(lengths, avg_times)
+    plt.figure(figsize=(8,5))
+    plt.errorbar(lengths, avg_times, yerr=stddev_times, fmt='-o', 
+                 capsize=8, c='steelblue', ecolor='lightskyblue', ms=8)
+    plt.xlabel('Number of Tokens')
+    plt.ylabel('Elapsed Time')
+    scale_x, scale_y = scale.split('-')
+    if scale_x == 'log':
+        plt.semilogx()
+    if scale_y == 'log':
+        plt.semilogy()
+    plt.grid(visible=True, linestyle='--', alpha=0.7)
+    plt.title(f"Tokens Generation Time", fontsize=11)
+    plt.tight_layout()
+    plt.savefig(path)
+    plt.show()
+    
+
+
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    options = "m:T:L:f:c:"
-    long_options = ["model=", "temperature=", "file=", "prompt=",
-                     "num_tokens=", "length=", "config="]
+    options = "m:T:L:f:c:s"
+    long_options = ["model=", "temperature=", "file=", "prompt=", "top_k=", 
+                    "repetition_penalty=", "top_p=", "num_tokens=", "length=", 
+                    "config=", "saveplot"]
     arguments, values = getopt.getopt(args, options, long_options)
+    save_plot = False
     for arg, val in arguments:
         if arg in ('-T', "--temperature"):
             T = TEMPERATURE = float(val)
@@ -126,6 +286,14 @@ if __name__ == '__main__':
             PRETRAINED_PATH = val
         elif arg in ('-L', "--num_tokens", "--length"):
             NUM_TOKENS = int(val)
+        elif arg in ("--top_k",):
+            TOP_K = int(val)
+        elif arg in ("--top_p",):
+            TOP_P = float(val)
+        elif arg in ("--repetition_penalty",):
+            REPETITION_PENALTY = float(val)
+        elif arg in ('-s', '--saveplot'):
+            save_plot = True
         else:
             raise getopt.GetoptError(
                 f"Unknown argument. Valid arguments are\n"
@@ -133,7 +301,11 @@ if __name__ == '__main__':
                 f"-f, --prompt, --file\n"
                 f"-L, --length, --num_tokens\n"
                 f"-m, --model\n"
-                f"-T, --temperature\n",
+                f"-T, --temperature\n"
+                f"--top_k\n"
+                f"--top_p\n"
+                f"--repetition_penalty\n"
+                f"-s, --saveplot\n", 
                 opt=str(val)
             )
         
@@ -152,12 +324,27 @@ if __name__ == '__main__':
 
     print("Elaborazione del prompt in corso...")
 
-    output = smart_generate_text(model, PROMPT_FILE, NUM_TOKENS, 
-                                 temperature=TEMPERATURE)
+    # output = smart_generate_text(model, PROMPT_FILE, NUM_TOKENS, 
+    #                              temperature=TEMPERATURE)
+
+    output = ultrasmart_generate_text(
+        model, PROMPT_FILE, NUM_TOKENS,
+        temperature = TEMPERATURE,
+        top_k = TOP_K,
+        top_p = TOP_P,
+        repetition_penalty = REPETITION_PENALTY
+    )
 
     print("\n---Generated text---")
     print(output['text'])
     print(f"\nGeneration time: {output['elapsed_time']:.5f}s")
+
+    if save_plot:
+        plot_speed(model, 
+                   (64, 128, 192, 256, 64*5, 64*6, 64*7, 64*8), 
+                   rep=10, 
+                   scale='lin-lin', 
+                   path='figures/generation_time.png')
     
 
 

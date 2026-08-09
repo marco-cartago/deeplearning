@@ -8,7 +8,7 @@ This repository contains the code of the final project of the course, which cons
 
 ## Setup
 
-Install the libraries in the `requirements.txt` (`torch` and `tqdm`).
+Install the libraries in the `requirements.txt` (`torch`, `tqdm`, `matplotlib` and `numpy`).
 
 ## Usage
 ### Training a Model
@@ -27,7 +27,12 @@ Run the script `testing.py` with these flags:
 - `-m | --model`: path of a pretrained model, mandatory;
 - `-f | --file | --prompt`: give an input to the model with this flag, default `data/prompt.txt`;
 - `-L | --length | --num_tokens`: how many tokens to generate, optional (default 100);
-- `-T | --temperature`: the generation temperature, optional positive number (default 1.0). The higher $T$ the more random the output, the lower the more deterministic: $$\text{prob}_{i-\text{th token}}=\frac{\exp(\frac{\text{out}_i}{T})}{\sum_{j=1}^{\text{no. tokens}}\exp(\frac{\text{out}_j}{T})}.$$
+- `--top_k`: select only $k$ most probable next tokens, default keeps all;
+- `--top_p`: select among a selection of most probable tokens that reach together a $>p$ cumulative probability;
+- `-T | --temperature`: the generation temperature, optional positive number (default 1.0). The higher $T$ the more random the output, the lower the more deterministic: $$\text{prob}_{i-\text{th token}}=\frac{\exp(\frac{\text{out}_i}{T})}{\sum_{j=1}^{\text{no. tokens}}\exp(\frac{\text{out}_j}{T})};$$
+- `-s | --savefig`: no argument required, it tells whether to save the generation speed plot.
+
+Note: a `--repetition_penalty` flag is available, but we do not recommend using it.
 
 
 ## AI Policy and Disclaimers
