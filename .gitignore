@@ -1,6 +1,8 @@
 venv/
 __pycache__/
 data/
-pretrained/
+pretrained/mamba-D128-E2.0-N8-d4.pth
+pretrained/mamba-D256-E1.5-N12-d5.pth
+pretrained/mamba-D384-E2.0-N16-d6.pth
 .vscode/
 old_files/
