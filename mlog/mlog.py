@@ -49,12 +49,12 @@ class ModelLog(object):
     def dump_to_file(self, log_folder):
 
         mc = self.model_config
-        model_name = "mamba-D{D}-E{E:.1f}-N{N}-d{d}"
+        model_name = "mamba-D{d}-E{e:.1f}-N{n}-d{t}"
         model_name = model_name.format(
-            D = mc.d_model,
-            E = mc.expand_factor,
-            N = mc.d_state,
-            d = mc.n_layers,
+            d = mc.d_model,
+            e = mc.expand_factor,
+            n = mc.d_state,
+            t = mc.n_layers,
         )
         t = time.time_ns()
         self.dump_timestamp = t
@@ -62,7 +62,7 @@ class ModelLog(object):
         path = os.path.join(
             log_folder, 
             f"{model_name}" +
-            f"{t}.pkl"
+            f"{t}d.pkl"
         )
 
         with open(path, "wb") as file:
