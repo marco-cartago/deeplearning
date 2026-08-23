@@ -1,11 +1,14 @@
 import sys, getopt
 import string
+import time
+import os
 
 import torch
 import tqdm
 
 from mamba import MambaConfig, MambaForCausalLM
 from lmtools import get_charset, encode, decode, auto_format, preprocess_data
+from mlog import ModelLog
 
 CONFIG: str | None = None
 
@@ -32,15 +35,22 @@ def get_batch(data: torch.Tensor, context_len: int, batch_size: int):
     return x, y
 
 
-def train_loop(config: MambaConfig, encoded_data: torch.Tensor, 
+def train_loop(config: MambaConfig, mlog: ModelLog, encoded_data: torch.Tensor, 
                epochs=EPOCHS,
                batch_size=BATCH_SIZE,
                pretrained_path: str | None = PRETRAINED_PATH) -> MambaForCausalLM:
+
     model = MambaForCausalLM(config)
+
+    mlog.n_epochs = EPOCHS 
+    mlog.batch_size = BATCH_SIZE
+
     if pretrained_path:
         model.load_state_dict(torch.load(pretrained_path))
+
     loss = torch.nn.CrossEntropyLoss()
     optim = torch.optim.AdamW(model.parameters(), lr = lr)
+
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optim, "min", 
         patience=5,
@@ -54,28 +64,50 @@ def train_loop(config: MambaConfig, encoded_data: torch.Tensor,
     model.train()
     # loss_vals = [0.]*epochs
     pbar = tqdm.trange(epochs, leave=True, dynamic_ncols=True)
-    for i in pbar:
+
+    training_start_time = time.time_ns()
+
+    for _ in pbar:
+
+        epoch_start = time.time_ns() # Epoch start -------------------------------
+
         # training loop
         x, y = get_batch(encoded_data, CONTEXT_LEN, batch_size)
         logits = model(x)
         B, T, C = logits.shape
+
         loss_val = loss(logits.view(B*T, C), y.view(-1))
         # loss_vals[i] = loss_val.item()
         optim.zero_grad()
         loss_val.backward()
+
         optim.step()
+        epoch_end = time.time_ns() # Epoch end -------------------------------
+
         scheduler.step(metrics=loss_val.item())
         current_lr = scheduler.get_last_lr()[0] # optim.param_groups[0]['lr']
         pbar.set_postfix({"Loss": f"{loss_val.item():.3f}", "lr": f"{current_lr:.2e}"})
+
+        # Logging
+        mlog.e_time_elapsed.append(epoch_end - epoch_start)
+        mlog.e_train_loss.append(loss_val.detach().item())
+        mlog.e_stepsize.append(current_lr)
+
+    training_end_time = time.time_ns()
+    mlog.total_time = training_end_time - training_start_time
+
     return model
 
 
 
 if __name__ == '__main__':
+
     args = sys.argv[1:]
-    options = "L:B:c:e:f:p:"
-    long_options = ["config=", "epochs=", "file=", "batch=", "context_len=", "lr=", "pretrained="]
+    options = "L:B:c:e:f:p:g:"
+    long_options = ["config=", "epochs=", "file=", "batch=", "context_len=", "lr=", "pretrained=", "generate="]
     arguments, values = getopt.getopt(args, options, long_options)
+    GENERATE = False
+
     for arg, val in arguments:
         if arg in ('-L', "--context_len"):
             L = CONTEXT_LEN = int(val)
@@ -91,6 +123,9 @@ if __name__ == '__main__':
             PRETRAINED_PATH = val
         elif arg in ('-B', "--batch"):
             BATCH_SIZE = int(val)
+        elif arg in ('-g', "--generate"):
+            GENERATE = True
+        
         else:
             raise getopt.GetoptError(
                 f"Unknown argument. Valid arguments are\n"
@@ -99,6 +134,7 @@ if __name__ == '__main__':
                 f"-L, --context_len\n"
                 f"-e, --epochs\n"
                 f"-B, --batch\n"
+                f"-g, --generate\n"
                 f"--lr",
                 opt=str(val)
             )
@@ -111,16 +147,19 @@ if __name__ == '__main__':
     tokens = get_charset(config.charset_file)
     encoded_data = preprocess_data(text_file, tokens)
 
-    model = train_loop(config, encoded_data, EPOCHS, BATCH_SIZE, PRETRAINED_PATH)
+    mlog = ModelLog(config)
+    model = train_loop(config, mlog, encoded_data, EPOCHS, BATCH_SIZE, PRETRAINED_PATH)
+    mlog.dump_to_file("./logs")
 
-    model_name = "mamba-D{D}-E{E:.1f}-N{N}-d{d}"
+    model_name = "mamba-D{D}-E{E:.1f}-N{N}-{d}d_{t}"
     model_name = model_name.format(
         D = config.d_model,
         E = config.expand_factor,
         N = config.d_state,
         d = config.n_layers,
+        t = mlog.dump_timestamp
     )
-    torch.save(model.state_dict(), f"pretrained/{model_name}.pth")
+    torch.save(model.state_dict(), f"./pretrained/{model_name}.pth")
 
     # seq_token = preprocess_data('data/prompt.txt', tokens=tokens).unsqueeze(1)
     # sf = torch.nn.Softmax(dim = -1)
@@ -132,39 +171,40 @@ if __name__ == '__main__':
     # id_to_token = {i: el for i, el in enumerate(tokens)}
     # print(decode(seq_token[0].cpu().numpy(), id_to_token))
 
-    # 2. Caricamento del prompt e preparazione del dizionario
-    # preprocess_data restituisce un Tensor 1D -> aggiungiamo la dimensione del batch [1, seq_len]
-    prompt_tensor = preprocess_data('data/prompt.txt', tokens=tokens)
-    seq_token = prompt_tensor.unsqueeze(0).to(DEVICE)  # Shape: [1, seq_len]
+    if GENERATE:
+        # 2. Caricamento del prompt e preparazione del dizionario
+        # preprocess_data restituisce un Tensor 1D -> aggiungiamo la dimensione del batch [1, seq_len]
+        prompt_tensor = preprocess_data('data/prompt.txt', tokens=tokens)
+        seq_token = prompt_tensor.unsqueeze(0).to(DEVICE)  # Shape: [1, seq_len]
 
-    id_to_token = {i: el for i, el in enumerate(tokens)}
-    sf = torch.nn.Softmax(dim=-1)
+        id_to_token = {i: el for i, el in enumerate(tokens)}
+        sf = torch.nn.Softmax(dim=-1)
 
-    # 3. Quanti nuovi token generare (es. 200 token)
-    GENERATE_TOKENS = 128
+        # 3. Quanti nuovi token generare (es. 200 token)
+        GENERATE_TOKENS = 128
 
-    model.eval()
-    with torch.no_grad():  # Disabilita il tracciamento dei gradienti durante l'inferenza
-        for _ in range(GENERATE_TOKENS):
-            # Passaggio forward
-            logits = model(seq_token)
-            
-            # Prendiamo i logit dell'ultimo token della sequenza
-            last_token_logits = logits[:, -1, :]
-            
-            # Calcolo delle probabilità con Softmax
-            probs = sf(last_token_logits)
-            
-            # Sampling multinomiale per il token successivo
-            next_token = torch.multinomial(probs, num_samples=1)  # Shape: [1, 1]
-            
-            # Concateniamo il nuovo token alla sequenza corrente
-            seq_token = torch.cat((seq_token, next_token), dim=1)
+        model.eval()
+        with torch.no_grad():  # Disabilita il tracciamento dei gradienti durante l'inferenza
+            for _ in range(GENERATE_TOKENS):
+                # Passaggio forward
+                logits = model(seq_token)
+                
+                # Prendiamo i logit dell'ultimo token della sequenza
+                last_token_logits = logits[:, -1, :]
+                
+                # Calcolo delle probabilità con Softmax
+                probs = sf(last_token_logits)
+                
+                # Sampling multinomiale per il token successivo
+                next_token = torch.multinomial(probs, num_samples=1)  # Shape: [1, 1]
+                
+                # Concateniamo il nuovo token alla sequenza corrente
+                seq_token = torch.cat((seq_token, next_token), dim=1)
 
-    # 4. Decodifica della sequenza completa (prompt + token generati)
-    generated_ids = seq_token[0].cpu().tolist()
-    generated_text = decode(generated_ids, id_to_token)
+        # 4. Decodifica della sequenza completa (prompt + token generati)
+        generated_ids = seq_token[0].cpu().tolist()
+        generated_text = decode(generated_ids, id_to_token)
 
-    print("--- Testo Generato ---")
-    print(generated_text)
+        print("--- Testo Generato ---")
+        print(generated_text)
     
