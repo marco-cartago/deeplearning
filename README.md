@@ -20,6 +20,7 @@ Run the script `training.py` with the following flags:
 - `-B | --batch`: batch size, optional (default 32);
 - `-e | --epochs`: number of iterations on groups of `L*B` tokens, optional (default 61);
 - `--lr`: learning rate, optional (default 3e-4). It decreases by 25% on plateaues with patience 10 iterations.
+- `-g | --generate` If the program should output once the training process has ended, a short snippet generated from an initial prompt placed in `./data/prompt.txt`
 
 ### Testing a Model
 Run the script `testing.py` with these flags:
