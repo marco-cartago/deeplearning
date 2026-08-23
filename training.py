@@ -1,7 +1,6 @@
-import sys, getopt
-import string
+import sys
+import argparse
 import time
-import os
 
 import torch
 import tqdm
@@ -10,17 +9,6 @@ from mamba import MambaConfig, MambaForCausalLM
 from lmtools import get_charset, encode, decode, auto_format, preprocess_data
 from mlog import ModelLog
 
-CONFIG: str | None = None
-
-L = CONTEXT_LEN = 512
-BATCH_SIZE = 32
-EPOCHS = round(1e6/(512*32)) 
-    # process ~1M tokens per book by default
-    # for a 100k characters text, it is roughly equivalent
-    # to 6 actual epochs.
-lr = 3e-4
-PRETRAINED_PATH: str | None = None
-
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -28,22 +16,27 @@ def get_batch(data: torch.Tensor, context_len: int, batch_size: int):
     #select a random starting point
     ix = torch.randint(len(data) - context_len - 1, (batch_size,))
     #select starting point + context_len
-    x = torch.stack([data[i:i+L] for i in ix])
+    x = torch.stack([data[i:i+context_len] for i in ix])
     #select target
-    y = torch.stack([data[i+1:i+L+1] for i in ix])
+    y = torch.stack([data[i+1:i+context_len+1] for i in ix])
     x, y = x.to(DEVICE), y.to(DEVICE)
     return x, y
 
 
-def train_loop(config: MambaConfig, mlog: ModelLog, encoded_data: torch.Tensor, 
-               epochs=EPOCHS,
-               batch_size=BATCH_SIZE,
-               pretrained_path: str | None = PRETRAINED_PATH) -> MambaForCausalLM:
+def train_loop(
+    config: MambaConfig, 
+    mlog: ModelLog, 
+    encoded_data: torch.Tensor, 
+    epochs: int,
+    batch_size: int,
+    context_len: int,
+    pretrained_path: str | None
+) -> MambaForCausalLM:
 
     model = MambaForCausalLM(config)
 
-    mlog.n_epochs = EPOCHS 
-    mlog.batch_size = BATCH_SIZE
+    mlog.n_epochs = n_epochs 
+    mlog.batch_size = batch_size
 
     if pretrained_path:
         model.load_state_dict(torch.load(pretrained_path))
@@ -72,7 +65,7 @@ def train_loop(config: MambaConfig, mlog: ModelLog, encoded_data: torch.Tensor,
         epoch_start = time.time_ns() # Epoch start -------------------------------
 
         # training loop
-        x, y = get_batch(encoded_data, CONTEXT_LEN, batch_size)
+        x, y = get_batch(encoded_data, context_len, batch_size)
         logits = model(x)
         B, T, C = logits.shape
 
@@ -102,53 +95,46 @@ def train_loop(config: MambaConfig, mlog: ModelLog, encoded_data: torch.Tensor,
 
 if __name__ == '__main__':
 
-    args = sys.argv[1:]
-    options = "L:B:c:e:f:p:g:"
-    long_options = ["config=", "epochs=", "file=", "batch=", "context_len=", "lr=", "pretrained=", "generate="]
-    arguments, values = getopt.getopt(args, options, long_options)
-    GENERATE = False
+    def parse_args():
+        parser = argparse.ArgumentParser(description="Mamba Model Training and Generation")
+        parser.add_argument("-c", "--config", type=str, help="Path to config JSON")
+        parser.add_argument("-f", "--file", type=str, help="Path to text file")
+        parser.add_argument("-L", "--context_len", type=int, help="Context length", default=512)
+        parser.add_argument("-e", "--epochs", type=int, help="Number of epochs", default=round(1e6/(512*32)))
+        parser.add_argument("-B", "--batch", type=int, help="Batch size", default=32)
+        parser.add_argument("-p", "--pretrained", type=str, help="Path to pretrained model")
+        parser.add_argument("--lr", type=float, help="Learning rate", default=3e-4)
+        parser.add_argument("-g", "--generate", action="store_true", help="Enable generation mode", default=False)
+        return parser.parse_args()
 
-    for arg, val in arguments:
-        if arg in ('-L', "--context_len"):
-            L = CONTEXT_LEN = int(val)
-        elif arg in ('-c', "--config"):
-            CONFIG = val
-        elif arg in ('-e', "--epochs"):
-            EPOCHS = int(val)
-        elif arg in ("--lr"):
-            lr = float(val)
-        elif arg in ('-f', "--file"):
-            text_file = val
-        elif arg in ('-p', "--pretrained"):
-            PRETRAINED_PATH = val
-        elif arg in ('-B', "--batch"):
-            BATCH_SIZE = int(val)
-        elif arg in ('-g', "--generate"):
-            GENERATE = True
-        
-        else:
-            raise getopt.GetoptError(
-                f"Unknown argument. Valid arguments are\n"
-                f"-c, --config\n"
-                f"-f, --file\n"
-                f"-L, --context_len\n"
-                f"-e, --epochs\n"
-                f"-B, --batch\n"
-                f"-g, --generate\n"
-                f"--lr",
-                opt=str(val)
-            )
-        
-    if CONFIG:
-        config = MambaConfig.from_config_json(CONFIG)
+    args = parse_args()
+
+    # Mapping to constants
+    context_len = args.context_len
+    config_path = args.config
+    n_epochs = args.epochs
+    lr = args.lr
+    text_file = args.file
+    pretrained_path = args.pretrained
+    batch_size = args.batch
+    generate = args.generate
+
+    if config_path:
+        config = MambaConfig.from_config_json(config_path)
     else:
         config = MambaConfig()
 
     tokens = get_charset(config.charset_file)
     encoded_data = preprocess_data(text_file, tokens)
 
+    tokens = get_charset(config.charset_file)
+    encoded_data = preprocess_data(text_file, tokens)
+
     mlog = ModelLog(config)
-    model = train_loop(config, mlog, encoded_data, EPOCHS, BATCH_SIZE, PRETRAINED_PATH)
+    model = train_loop(config, mlog, encoded_data, 
+                       n_epochs, batch_size, context_len, 
+                       pretrained_path
+                    )
     mlog.dump_to_file("./logs")
 
     model_name = "mamba-D{D}-E{E:.1f}-N{N}-{d}d_{t}"
@@ -171,7 +157,7 @@ if __name__ == '__main__':
     # id_to_token = {i: el for i, el in enumerate(tokens)}
     # print(decode(seq_token[0].cpu().numpy(), id_to_token))
 
-    if GENERATE:
+    if generate:
         # 2. Caricamento del prompt e preparazione del dizionario
         # preprocess_data restituisce un Tensor 1D -> aggiungiamo la dimensione del batch [1, seq_len]
         prompt_tensor = preprocess_data('data/prompt.txt', tokens=tokens)
