@@ -11,7 +11,6 @@ from mlog import ModelLog
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-
 def get_batch(data: torch.Tensor, context_len: int, batch_size: int):
     #select a random starting point
     ix = torch.randint(len(data) - context_len - 1, (batch_size,))
@@ -21,7 +20,6 @@ def get_batch(data: torch.Tensor, context_len: int, batch_size: int):
     y = torch.stack([data[i+1:i+context_len+1] for i in ix])
     x, y = x.to(DEVICE), y.to(DEVICE)
     return x, y
-
 
 def train_loop(
     config: MambaConfig, 
@@ -91,23 +89,23 @@ def train_loop(
 
     return model
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Mamba Model Training and Generation")
+    parser.add_argument("-c", "--config", type=str, help="Path to config JSON")
+    parser.add_argument("-f", "--file", type=str, help="Path to text file")
+    parser.add_argument("-L", "--context_len", type=int, help="Context length", default=512)
+    parser.add_argument("-e", "--epochs", type=int, help="Number of epochs", default=round(1e6/(512*32)))
+    parser.add_argument("-B", "--batch", type=int, help="Batch size", default=32)
+    parser.add_argument("-p", "--pretrained", type=str, help="Path to pretrained model")
+    parser.add_argument("--lr", type=float, help="Learning rate", default=3e-4)
+    parser.add_argument("-g", "--generate", action="store_true", help="Enable generation mode", default=False)
+
+    return parser.parse_args()
 
 
 if __name__ == '__main__':
 
-    def parse_args():
-        parser = argparse.ArgumentParser(description="Mamba Model Training and Generation")
-        parser.add_argument("-c", "--config", type=str, help="Path to config JSON")
-        parser.add_argument("-f", "--file", type=str, help="Path to text file")
-        parser.add_argument("-L", "--context_len", type=int, help="Context length", default=512)
-        parser.add_argument("-e", "--epochs", type=int, help="Number of epochs", default=round(1e6/(512*32)))
-        parser.add_argument("-B", "--batch", type=int, help="Batch size", default=32)
-        parser.add_argument("-p", "--pretrained", type=str, help="Path to pretrained model")
-        parser.add_argument("--lr", type=float, help="Learning rate", default=3e-4)
-        parser.add_argument("-g", "--generate", action="store_true", help="Enable generation mode", default=False)
-        return parser.parse_args()
-
-    args = parse_args()
+    args = parse_arguments()
 
     # Mapping to constants
     context_len = args.context_len
@@ -135,7 +133,7 @@ if __name__ == '__main__':
                        n_epochs, batch_size, context_len, 
                        pretrained_path
                     )
-    mlog.dump_to_file("./logs")
+    mlog.dump_to_file("./logs/")
 
     model_name = "mamba-D{D}-E{E:.1f}-N{N}-{d}d_{t}"
     model_name = model_name.format(
@@ -164,7 +162,7 @@ if __name__ == '__main__':
         seq_token = prompt_tensor.unsqueeze(0).to(DEVICE)  # Shape: [1, seq_len]
 
         id_to_token = {i: el for i, el in enumerate(tokens)}
-        sf = torch.nn.Softmax(dim=-1)
+        softmax = torch.nn.Softmax(dim=-1)
 
         # 3. Quanti nuovi token generare (es. 200 token)
         GENERATE_TOKENS = 128
@@ -179,7 +177,7 @@ if __name__ == '__main__':
                 last_token_logits = logits[:, -1, :]
                 
                 # Calcolo delle probabilità con Softmax
-                probs = sf(last_token_logits)
+                probs = softmax(last_token_logits)
                 
                 # Sampling multinomiale per il token successivo
                 next_token = torch.multinomial(probs, num_samples=1)  # Shape: [1, 1]
