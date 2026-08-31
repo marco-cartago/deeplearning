@@ -7,25 +7,24 @@ from mamba import MambaConfig, MambaBlock, RMSNorm
 class MambaLayer(nn.Module):
     def __init__(self, config: MambaConfig):
         super().__init__()
-        # Normalizzazione prima del blocco SSM
+        # Layer normalization before SSM
         self.norm1 = RMSNorm(config.d_model, eps=config.norm_eps)
-        # Assumiamo che MambaBlock sia la classe creata nel passaggio precedente
         self.ssm = MambaBlock(config) 
         
-        # Normalizzazione prima del blocco MLP
+        # LayerNorm before MLP
         self.norm2 = RMSNorm(config.d_model, eps=config.norm_eps)
 
     def forward(self, x):
         """
         x shape: (Batch, Sequence_Length, d_model)
         """
-        # Ramo SSM con connessione residuale (Pre-Norm)
+        # SSM branch with residual connection (Pre-Norm)
         residual = x
         x = self.norm1(x)
         x = self.ssm(x)
         x = x + residual
         
-        # Ramo MLP con connessione residuale (Pre-Norm)
+        # MLP branch with residual connection (Pre-Norm)
         residual = x
         x = self.norm2(x)
         x = x + residual
@@ -36,13 +35,13 @@ class MambaLayer(nn.Module):
              cache: tuple[torch.Tensor, torch.Tensor]) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
         conv_state, ssm_state = cache
         
-        # Ramo SSM con connessione residuale (Pre-Norm)
+        # SSM branch with residual connection (Pre-Norm)
         residual = x
         x = self.norm1(x)
         x, conv_state, ssm_state = self.ssm.step(x, conv_state, ssm_state)
         x = x + residual
         
-        # Ramo MLP con connessione residuale (Pre-Norm)
+        # MLP branch with residual connection (Pre-Norm)
         residual = x
         x = self.norm2(x)
         x = x + residual
@@ -55,7 +54,7 @@ class Mamba(nn.Module):
         super().__init__()
         self.config = config
         
-        # Accatasta un numero arbitrario di MambaLayer usando nn.ModuleList
+        # Stack some MambaLayers using ModuleList
         self.layers = nn.ModuleList([
             MambaLayer(config) for _ in range(config.n_layers)
         ])
@@ -68,7 +67,7 @@ class Mamba(nn.Module):
         x shape: (Batch, Sequence_Length, d_model)
         Output shape: (Batch, Sequence_Length, d_model)
         """
-        # Passa attraverso l'intero stack di layer sequenzialmente
+
         for layer in self.layers:
             x = layer(x)
             
@@ -123,7 +122,7 @@ class MambaForCausalLM(nn.Module):
     def allocate_caches(self, 
                         batch_size: int, 
                         device: str | torch.device) -> list[tuple[torch.Tensor, torch.Tensor]]:
-        """Inizializza a zero gli stati di Convoluzione e SSM per tutti i layer."""
+        """Initialize to zero the convolution and SSM states for all layers."""
         caches = []
         for _ in range(self.config.n_layers):
             conv_state = torch.zeros(batch_size, self.config.d_inner, self.config.d_conv, device=device)
@@ -134,7 +133,7 @@ class MambaForCausalLM(nn.Module):
     def step(self, input_id: torch.Tensor, caches: list[tuple[torch.Tensor, torch.Tensor]]) -> tuple[torch.Tensor, list]:
         """
         input_id shape: (Batch,) oppure (Batch, 1)
-        Restituisce i logits per il singolo token successivo e le nuove cache.
+        Retruns logits for a single next token and the new cached values.
         """
         x = self.embedding(input_id)
         if x.dim() == 3: # Se è passata un'extra dim per Sequence_Length=1, la rimuoviamo

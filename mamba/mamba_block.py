@@ -211,34 +211,34 @@ class SelectiveSSM(nn.Module):
         batch_size, d_inner = xt.shape
         device = xt.device
 
-        # 1. Inizializzazione dello stato se è il primo token della generazione
+        # 1. Initialization of the state if it is the first token of the generation
         if h is None:
             h = torch.zeros(batch_size, d_inner, self.config.d_state, device=device)
 
-        # 2. Matrice A costante
+        # 2. Time-Invariant A matrix
         A = -torch.exp(self.A_log.float())  # Shape: (d_inner, d_state)
 
-        # 3. Parametri dipendenti dal token corrente (xt)
+        # 3. Parameters that depend on the current token (xt)
         dt = self.dt_proj(xt)               # (Batch, d_inner)
-        dt = F.softplus(dt)                 # Garantisce che il passo temporale sia positivo
+        dt = F.softplus(dt)                 # Grants positive time-step
 
         bt = self.B_proj(xt)                # (Batch, d_state)
         ct = self.C_proj(xt)                # (Batch, d_state)
 
-        # 4. Discretizzazione ZOH per il singolo timestep
+        # 4. Discretization for a single time step
         # dA: (Batch, d_inner, d_state)
         dA = torch.exp(dt.unsqueeze(-1) * A.unsqueeze(0))
         
         # dB: (Batch, d_inner, d_state)
         dB = dt.unsqueeze(-1) * bt.unsqueeze(1)
 
-        # 5. Aggiornamento dello Stato Nascosto: h_t = dA * h_{t-1} + dB * x_t
+        # 5. AUpdate of the latent state: h_t = dA * h_{t-1} + dB * x_t
         h = dA * h + dB * xt.unsqueeze(-1)
 
-        # 6. Calcolo dell'Output: y_t = sum(h_t * C_t, dim=-1)
+        # 6. Output computation: y_t = sum(h_t * C_t, dim=-1)
         yt = (h * ct.unsqueeze(1)).sum(dim=-1)  # (Batch, d_inner)
 
-        # 7. Applicazione della Skip Connection D
+        # 7. Skip connection
         yt = yt + (xt * self.D)
         assert h is not None, "h at this point should be a tensor."
         return yt, h
@@ -323,20 +323,20 @@ class MambaBlock(nn.Module):
             x_proj = self.in_proj(x)
             x_main, x_gate = x_proj.chunk(2, dim=-1) # (Batch, d_inner)
 
-            # 2. Convoluzione Causale 1D step-by-step
-            # Shift a sinistra dello stato della convoluzione e inserimento del nuovo token a destra
+            # 2. Causal 1D convoplution step-by-step
+            # Left-Shift oif convolution state and insertion of the new token to the right
             conv_state = torch.roll(conv_state, shifts=-1, dims=-1)
             conv_state[:, :, -1] = x_main
             
-            # Calcolo manuale della convoluzione depthwise sul buffer corrente
-            # self.conv1d.weight ha shape (d_inner, 1, d_conv), squeeze in (d_inner, d_conv)
+            # Manual computation of convolution, depthwise on the current buffer
+            # self.conv1d.weight has shape (d_inner, 1, d_conv), squeezed becomes (d_inner, d_conv)
             x_main = torch.sum(conv_state * self.conv1d.weight.squeeze(1), dim=-1)
             if self.conv1d.bias is not None:
                 x_main = x_main + self.conv1d.bias
                 
             x_main = F.silu(x_main)
 
-            # 3. Step dell'SSM
+            # 3. SSM Step
             x_main, ssm_state = self.ssm.step(x_main, ssm_state)
 
             # 4. Gating
@@ -353,12 +353,12 @@ class RMSNorm(nn.Module):
     def __init__(self, d_model, eps=1e-5):
         super().__init__()
         self.eps = eps
-        # Parametro apprendibile per scalare la normalizzazione (gamma)
+        # Learnable parameter to scale the normalization (gamma)
         self.weight = nn.Parameter(torch.ones(d_model))
 
     def forward(self, x):
-        # Calcolo della varianza lungo l'ultima dimensione (d_model)
+        # Variance computation on the last dimension (d_model)
         variance = x.pow(2.).mean(-1, keepdim=True)
-        # Normalizzazione
+        # Normalization
         x_normed = x * torch.rsqrt(variance + self.eps)
         return self.weight * x_normed

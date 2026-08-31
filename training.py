@@ -133,19 +133,22 @@ if __name__ == '__main__':
                        n_epochs, batch_size, context_len, 
                        pretrained_path
                     )
-    if not os.path.isdir('logs'):
-        os.makedirs('logs')
-    mlog.dump_to_file("./logs/")
 
-    model_name = "mamba-D{D}-E{E:.1f}-N{N}-{d}d_{t}"
+    model_name = "mamba-D{D}-E{E:.1f}-N{N}-d{d}_{t}"
     model_name = model_name.format(
         D = config.d_model,
         E = config.expand_factor,
         N = config.d_state,
         d = config.n_layers,
-        t = mlog.dump_timestamp
+        t = mlog.dump_timestamp 
+        # keeping a timestamp decreases chances to mess with the model;
+        # overwrite the old model manually when you are sure the new model is fine as well. 
     )
     torch.save(model.state_dict(), f"./pretrained/{model_name}.pth")
+
+    if not os.path.isdir('logs'):
+        os.makedirs('logs')
+    mlog.dump_to_file("./logs/")
 
     # seq_token = preprocess_data('data/prompt.txt', tokens=tokens).unsqueeze(1)
     # sf = torch.nn.Softmax(dim = -1)
@@ -158,7 +161,7 @@ if __name__ == '__main__':
     # print(decode(seq_token[0].cpu().numpy(), id_to_token))
 
     if generate:
-        # 2. Caricamento del prompt e preparazione del dizionario
+        # 1. Loading prompt and dictionary preparation
         # preprocess_data restituisce un Tensor 1D -> aggiungiamo la dimensione del batch [1, seq_len]
         prompt_tensor = preprocess_data('data/prompt.txt', tokens=tokens)
         seq_token = prompt_tensor.unsqueeze(0).to(DEVICE)  # Shape: [1, seq_len]
@@ -166,31 +169,29 @@ if __name__ == '__main__':
         id_to_token = {i: el for i, el in enumerate(tokens)}
         softmax = torch.nn.Softmax(dim=-1)
 
-        # 3. Quanti nuovi token generare (es. 200 token)
+        # 2. How many tokens?
         GENERATE_TOKENS = 128
 
         model.eval()
-        with torch.no_grad():  # Disabilita il tracciamento dei gradienti durante l'inferenza
-            for _ in range(GENERATE_TOKENS):
-                # Passaggio forward
+        with torch.no_grad(): 
+            for _ in range(GENERATE_TOKENS): # naive implementation O(GENERATE_TOKENS^2)
                 logits = model(seq_token)
                 
-                # Prendiamo i logit dell'ultimo token della sequenza
+                # Logits of last token of the sequence
                 last_token_logits = logits[:, -1, :]
                 
-                # Calcolo delle probabilità con Softmax
                 probs = softmax(last_token_logits)
                 
-                # Sampling multinomiale per il token successivo
+                # Random multinomial sampling for the next token
                 next_token = torch.multinomial(probs, num_samples=1)  # Shape: [1, 1]
                 
-                # Concateniamo il nuovo token alla sequenza corrente
+                # Concatenate the new token to the sequence
                 seq_token = torch.cat((seq_token, next_token), dim=1)
 
-        # 4. Decodifica della sequenza completa (prompt + token generati)
+        # Decode whole sequence (prompt + generated text)
         generated_ids = seq_token[0].cpu().tolist()
         generated_text = decode(generated_ids, id_to_token)
 
-        print("--- Testo Generato ---")
+        print("--- Generated Text ---")
         print(generated_text)
     

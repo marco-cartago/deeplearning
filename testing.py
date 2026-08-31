@@ -38,22 +38,19 @@ def generate_text(model: MambaForCausalLM, prompt_file: str = 'data/prompt.txt',
     sf = torch.nn.Softmax(dim=-1)
     model.eval()
     for _ in range(num_tokens):
-        # Passaggio forward
+
         logits = model(seq_token)
         
-        # Prendiamo i logit dell'ultimo token della sequenza
+        # Logits from the last token of the sequence
         last_token_logits = logits[:, -1, :]
         
-        # Calcolo delle probabilità con Softmax
         probs = sf(last_token_logits/temperature)
-        
-        # Sampling multinomiale per il token successivo
         next_token = torch.multinomial(probs, num_samples=1)  # Shape: [1, 1]
         
-        # Concateniamo il nuovo token alla sequenza corrente
+        # Concatenate the new token to the sequence
         seq_token = torch.cat((seq_token, next_token), dim=1)
 
-    # 4. Decodifica della sequenza completa (prompt + token generati)
+    # Decode the sequence
     generated_ids = seq_token[0].cpu().tolist()
     generated_text = decode(generated_ids, id_to_token)
 
@@ -77,35 +74,28 @@ def smart_generate_text(model: MambaForCausalLM, prompt_file: str = 'data/prompt
     
     model.eval()
     
-    # 1. Inizializziamo le cache per lo stato conv e ssm di tutta la rete
+    # 1. Initialize cache for conv state and ssm
     caches = model.allocate_caches(batch_size, DEVICE)
     
     # 2. Phase 1: PREFILL
-    # Elaboriamo il prompt iniziale per popolare le cache con il contesto storico
     for t in range(seq_len - 1):
         input_id = prompt_ids[:, t]
         _, caches = model.step(input_id, caches)
         
-    # L'ultimo token del prompt è il punto di partenza per la generazione 
+    # Last prompt token is the starting point for generation 
     current_token = prompt_ids[:, -1]
     generated_ids = prompt_ids[0].cpu().tolist()
     
-    # 3. Phase 2: GENERAZIONE
-    # Ora operiamo con complessità O(1) in memoria e O(1) in tempo, passando solo un token alla volta.
+    # 3. Phase 2: GENERATION
     t0 = time.perf_counter()
     for _ in range(num_tokens):
-        # Passaggio forward su un SINGOLO token
         logits, caches = model.step(current_token, caches)
-        
-        # Calcolo probabilità
+
         probs = sf(logits / temperature)
-        
-        # Sampling multinomiale per il token successivo
         next_token = torch.multinomial(probs, num_samples=1)  # Shape: [1, 1]
-        
-        # Aggiungiamo alla lista dei generati e aggiorniamo il token corrente
         generated_ids.append(next_token.item())
         current_token = next_token.squeeze(-1) # [1,]
+
     t1 = time.perf_counter()
     generated_text = decode(generated_ids, id_to_token)
 
@@ -125,29 +115,29 @@ def apply_top_k_top_p(logits: torch.Tensor,
     """
     logits = logits.clone()
     
-    # 1. Applicazione Top-K
+    # 1. Apply Top-K
     if top_k > 0:
         top_k = min(top_k, logits.size(-1))
-        # Trova il valore del K-esimo logit più grande
+        # Find the value of the K-th biggest logit
         k_th_value = torch.topk(logits, top_k)[0][..., -1, None]
-        # Maschera tutti i logits inferiori al K-esimo valore
+        # Mask all logits below the found value
         indices_to_remove = logits < k_th_value
-        logits[indices_to_remove] = filter_value
+        logits[indices_to_remove] = filter_value # logits are set to -Inf, so they have prob=0
 
-    # 2. Applicazione Top-P (Nucleus)
+    # 2. Apply Top-P (Nucleus)
     if top_p > 0.0 and top_p < 1.0:
         sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
         sorted_probs = F.softmax(sorted_logits, dim=-1)
         cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
 
-        # Rimuove i token con probabilità cumulativa superiore a top_p
+        # Remove tokens with cumulative probability above top_p
         sorted_indices_to_remove = cumulative_probs > top_p
         
-        # Mantiene almeno il primo token spostando la maschera di 1 a destra
+        # Keep at least the first token by shifting the mask 1 to the right
         sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
         sorted_indices_to_remove[..., 0] = False
 
-        # Ripristina l'ordinamento originale delle maschere da rimuovere
+        # Restore the original ordering of the mask to remove
         indices_to_remove = sorted_indices_to_remove.scatter(-1, sorted_indices, sorted_indices_to_remove)
         logits[indices_to_remove] = filter_value
 
@@ -178,46 +168,44 @@ def ultrasmart_generate_text(
     
     model.eval()
     
-    # 1. Inizializziamo le cache per lo stato conv e ssm di tutta la rete
+    # 1. Initialize cache for conv state and ssm
     caches = model.allocate_caches(batch_size, DEVICE)
     
     # 2. Phase 1: PREFILL
-    # Elaboriamo il prompt iniziale per popolare le cache con il contesto storico
     for t in range(seq_len - 1):
         input_id = prompt_ids[:, t]
         _, caches = model.step(input_id, caches)
         
-    # L'ultimo token del prompt è il punto di partenza per la generazione 
+    # Last prompt token is the starting point for generation 
     current_token = prompt_ids[:, -1]
     generated_ids = prompt_ids[0].cpu().tolist()
     
-    # 3. Phase 2: GENERAZIONE
+    # 3. Phase 2: GENERATION
     t0 = time.perf_counter()
     for _ in range(num_tokens):
-        # Passaggio forward su un SINGOLO token
+
         logits, caches = model.step(current_token, caches) # Shape: (1, vocab_size)
         
-        # # A. Applica la Repetition Penalty se attivata (> 1.0)
+        # # A. Apply repetition penalty if activated (> 1.0)
         if repetition_penalty != 1.0:
-            # Prende i token unici recenti per evitare loop
-            recent_tokens = set(generated_ids[-3:]) # Guarda gli ultimi 30 token generati
+            recent_tokens = set(generated_ids[-4:]) # Guarda gli ultimi 4 token generati
             for token_id in recent_tokens:
                 if logits[0, token_id] < 0:
                     logits[0, token_id] *= repetition_penalty
                 else:
                     logits[0, token_id] /= repetition_penalty
 
-        # B. Applica la Temperatura
+        # B. Apply temperature
         logits = logits / temperature
         
-        # C. Applica il filtro Top-K e Top-P
+        # C. Apply top-K and top-P filter
         filtered_logits = apply_top_k_top_p(logits, top_k=top_k, top_p=top_p)
         
-        # D. Calcolo probabilità e sampling
+        # D. Softmax + Sampling
         probs = sf(filtered_logits)
         next_token = torch.multinomial(probs, num_samples=1)  # Shape: [1, 1]
         
-        # Aggiornamento token corrente e storico
+        # E. Update
         generated_ids.append(next_token.item())
         current_token = next_token.squeeze(-1) # Shape: [1,]
         
