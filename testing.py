@@ -54,7 +54,7 @@ def generate_text(model: MambaForCausalLM, prompt_file: str = 'data/prompt.txt',
     generated_ids = seq_token[0].cpu().tolist()
     generated_text = decode(generated_ids, id_to_token)
 
-    print("--- Testo Generato ---")
+    print("--- Generated Text ---")
     print(generated_text)
 
 
@@ -110,7 +110,7 @@ def apply_top_k_top_p(logits: torch.Tensor,
                       top_p: float = 0.0, 
                       filter_value: float = -float('Inf')) -> torch.Tensor:
     """
-    Filtra i logits usando Top-K e/o Top-P (Nucleus) sampling.
+    Filter logits using Top-K and/or Top-P (Nucleus) sampling.
     logits shape: (Batch, vocab_size)
     """
     logits = logits.clone()
@@ -310,7 +310,7 @@ if __name__ == '__main__':
     model.load_state_dict(torch.load(PRETRAINED_PATH))
     model.to(DEVICE)
 
-    print("Elaborazione del prompt in corso...")
+    print("Prompt processing ongoing...")
 
     # output = smart_generate_text(model, PROMPT_FILE, NUM_TOKENS, 
     #                              temperature=TEMPERATURE)
