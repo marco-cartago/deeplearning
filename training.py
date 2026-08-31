@@ -1,4 +1,4 @@
-import sys
+import sys, os
 import argparse
 import time
 
@@ -133,6 +133,8 @@ if __name__ == '__main__':
                        n_epochs, batch_size, context_len, 
                        pretrained_path
                     )
+    if not os.path.isdir('logs'):
+        os.makedirs('logs')
     mlog.dump_to_file("./logs/")
 
     model_name = "mamba-D{D}-E{E:.1f}-N{N}-{d}d_{t}"
