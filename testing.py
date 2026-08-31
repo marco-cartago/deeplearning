@@ -188,7 +188,7 @@ def ultrasmart_generate_text(
         
         # # A. Apply repetition penalty if activated (> 1.0)
         if repetition_penalty != 1.0:
-            recent_tokens = set(generated_ids[-4:]) # Guarda gli ultimi 4 token generati
+            recent_tokens = set(generated_ids[-4:]) # Look at last 4 genearated tokens
             for token_id in recent_tokens:
                 if logits[0, token_id] < 0:
                     logits[0, token_id] *= repetition_penalty

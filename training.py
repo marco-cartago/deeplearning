@@ -134,6 +134,10 @@ if __name__ == '__main__':
                        pretrained_path
                     )
 
+    if not os.path.isdir('logs'):
+        os.makedirs('logs')
+    mlog.dump_to_file("./logs/")
+
     model_name = "mamba-D{D}-E{E:.1f}-N{N}-d{d}_{t}"
     model_name = model_name.format(
         D = config.d_model,
@@ -146,9 +150,7 @@ if __name__ == '__main__':
     )
     torch.save(model.state_dict(), f"./pretrained/{model_name}.pth")
 
-    if not os.path.isdir('logs'):
-        os.makedirs('logs')
-    mlog.dump_to_file("./logs/")
+
 
     # seq_token = preprocess_data('data/prompt.txt', tokens=tokens).unsqueeze(1)
     # sf = torch.nn.Softmax(dim = -1)
