@@ -307,7 +307,7 @@ if __name__ == '__main__':
                                  " position of the pretrained model is mandatory.")
 
     model = MambaForCausalLM(config)
-    model.load_state_dict(torch.load(PRETRAINED_PATH))
+    model.load_state_dict(torch.load(PRETRAINED_PATH, map_location=torch.device(DEVICE)))
     model.to(DEVICE)
 
     print("Prompt processing ongoing...")
