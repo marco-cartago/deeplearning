@@ -62,7 +62,7 @@ class ModelLog(object):
         path = os.path.join(
             log_folder, 
             f"{model_name}" +
-            f"{t}d.pkl"
+            f"_{t}d.pkl"
         )
 
         with open(path, "wb") as file:
