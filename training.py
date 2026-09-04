@@ -37,7 +37,8 @@ def train_loop(
     mlog.batch_size = batch_size
 
     if pretrained_path:
-        model.load_state_dict(torch.load(pretrained_path))
+        model.load_state_dict(torch.load(pretrained_path, 
+                                         map_location=torch.device(DEVICE)))
 
     loss = torch.nn.CrossEntropyLoss()
     optim = torch.optim.AdamW(model.parameters(), lr = lr)
