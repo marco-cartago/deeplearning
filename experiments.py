@@ -1,11 +1,14 @@
-import torch
-import re
 from collections import Counter
-from lmtools import preprocess_data, get_charset
-import matplotlib.pyplot as plt
-import torch.nn.functional as F
 import pickle
+import re
+
+import torch
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import numpy as np
+
 from mamba import MambaForCausalLM
+from lmtools import preprocess_data, get_charset
 from testing import ultrasmart_generate_text
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -22,25 +25,38 @@ def load_mamba_model(pkl_path, pth_path):
     model.eval()
     return model, mlog
 
-def clean_and_tokenize(text):
-    text = text.lower()
-    words = re.findall(r'\b[a-zàèéìòù]+\b', text)
-    return words
 
-def get_ngrams(words, n):
-    return [" ".join(words[i:i+n]) for i in range(len(words)-n+1)]
+def clean_and_tokenize(text: str, use_words: bool = True):
+    if use_words:
+        text = text.lower()
+        words = re.findall(r'\b[a-zàèéìòù]+\b', text)
+        return words
+    else:
+        text = text.lower()
+        transl_table = text.maketrans("«»“”‘’", "\"\"\"\"''")
+        text = text.translate(transl_table)
+        return list(text)
 
-def experiment_ngrams(original_text_path, gen_text_path, n=3):
+
+def get_ngrams(words: list[str], n: int, use_words: bool = True):
+    if use_words:
+        return [" ".join(words[i:i+n]) for i in range(len(words)-n+1)]
+    else:
+        return [''.join(words[i:i+n]) for i in range(len(words)-n+1)]
+
+
+def experiment_ngrams(original_text_path, gen_text_path, n=3, 
+                      use_words: bool = True, save_path="./figures/ngrams.png"):
     print(f"\nCheck {n}-gram overlap between original and generated text")
-    
+
     with open(original_text_path, 'r', encoding='utf-8') as f:
-        original_words = clean_and_tokenize(f.read())
+        original_words = clean_and_tokenize(f.read(), use_words=use_words)
 
     with open(gen_text_path, 'r', encoding='utf-8') as f:
-        generated_words = clean_and_tokenize(f.read())
+        generated_words = clean_and_tokenize(f.read(), use_words=use_words)
 
-    orig_ngrams = Counter(get_ngrams(original_words, n))
-    gen_ngrams = Counter(get_ngrams(generated_words, n))
+    orig_ngrams = Counter(get_ngrams(original_words, n, use_words=use_words))
+    gen_ngrams = Counter(get_ngrams(generated_words, n, use_words=use_words))
     
     print(f"\nTop 5 {n}-grams in Divina Commedia:")
     for gram, count in orig_ngrams.most_common(5):
@@ -52,6 +68,37 @@ def experiment_ngrams(original_text_path, gen_text_path, n=3):
 
     overlap = set([g for g, c in gen_ngrams.most_common(50)]) & set([g for g, c in orig_ngrams.most_common(50)])
     print(f"\nOverlap in Top 50 {n}-grams: {len(overlap)}/50")
+
+    if not use_words:
+        top_12_orig = orig_ngrams.most_common(12)
+        keys = [k.replace(' ', '_').replace('\n', '\\n') for k, _ in top_12_orig]
+        
+        total_orig = orig_ngrams.total()
+        total_gen = gen_ngrams.total()
+        
+        # Relative frequency per 1,000 n-grams for the top 12 original keys
+        orig_values_pct = [1000 * count / total_orig for _, count in top_12_orig]
+        gen_values_pct = [1000 * gen_ngrams[gram] / total_gen for gram, _ in top_12_orig]
+
+        # Plotting paired horizontal bars
+        y = np.arange(len(keys))
+        height = 0.35
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.bar(y - height/2 - 0.01, orig_values_pct, height, label='Original Text', color='tab:blue')
+        ax.bar(y + height/2 + 0.01, gen_values_pct, height, label='Generated Text', color='tab:orange')
+
+        ax.set_xticks(y)
+        ax.set_xticklabels(keys)
+        # ax.invert_yaxis()  # Highest frequency trigram at the top
+        ax.set_xlabel(f'Frequency per 1,000 {n}-grams')
+        ax.set_title(f'Top 12 {n}-Grams Comparison (Original vs. Generated)')
+        ax.legend()
+        plt.tight_layout()
+        plt.savefig(save_path)
+
+
+
 
 def experiment_zipf(original_text_path, gen_text_path, save_path="./figures/zipf.png"):
     """Plots the word frequency distribution on a log-log scale."""
@@ -83,6 +130,7 @@ def experiment_zipf(original_text_path, gen_text_path, save_path="./figures/zipf
     plt.grid(True, which="both", ls="--", alpha=0.5)
     plt.savefig(save_path)
 
+
 def calculate_loss_on_text(model, config, text_path, context_len = 512):
     """Calculates the average Cross-Entropy loss of the model on a given text file."""
         
@@ -106,14 +154,15 @@ def calculate_loss_on_text(model, config, text_path, context_len = 512):
         
     return total_loss / num_chunks
 
+
 def experiment_domain_specialization(model, config):
     print("\nEvaluate how much the model is surprised by texts from different domains")
     
     test_files = {
         "Petrarca": "./data/petrarca.txt",
         "Wikipedia": "./data/wikipedia.txt",
-        "Generated": "./data/experiment_large_genv2.txt",
-        "Divina": "./data/divina_commedia.txt"
+    #    "Generated": "./data/experiment_large_genv2.txt",
+    #    "Divina": "./data/divina_commedia.txt"
     }
     
     for label, path in test_files.items():
@@ -123,25 +172,27 @@ def experiment_domain_specialization(model, config):
             print(f"  > {label:<35} | Loss: {loss:.4f} | Perplexity: {perplexity:.2f}")
 
 if __name__ == "__main__":
-    PKL_FILE = "./logs/mamba-D512-E2.5-N16-d81788458896791500095d.pkl"
-    PTH_FILE = "./pretrained/mamba-D512-E2.5-N16-d8_1788458896791500095.pth"
+    PKL_FILE = "./logs/mamba-D512-E2.5-N16-d8_cartago.pkl"
+    PTH_FILE = "./pretrained/mamba-D512-E2.5-N16-d8_cartago.pth"
     DANTE_TEXT_FILE = "data/divina_commedia.txt"
-    LARGE_GENERATED_FILE = "data/experiment_large_genv2.txt"
+    LARGE_GENERATED_FILE_1 = "data/experiment_large_genv1.txt"
+    LARGE_GENERATED_FILE_2 = "data/experiment_large_genv2.txt"
 
     model, mlog = load_mamba_model(PKL_FILE, PTH_FILE)
     print("Loaded model")
 
-    text = ultrasmart_generate_text(model=model, num_tokens=200_000, temperature=0.5, top_k=10) # remove params for more variance
-    print("Generated text")
+    # text = ultrasmart_generate_text(model=model, num_tokens=200_000, temperature=0.5, top_k=10) # remove params for more variance
+    # print("Generated text")
 
-    with open(LARGE_GENERATED_FILE, mode='w') as f:
-        f.write(text["text"])
+    # with open(LARGE_GENERATED_FILE, mode='w') as f:
+    #     f.write(text["text"])
 
-    experiment_ngrams(DANTE_TEXT_FILE, LARGE_GENERATED_FILE)
+
+    experiment_ngrams(DANTE_TEXT_FILE, LARGE_GENERATED_FILE_1, use_words=False)
     print("Runned n-grams experiment")
 
-    experiment_zipf(DANTE_TEXT_FILE, LARGE_GENERATED_FILE)
+    experiment_zipf(DANTE_TEXT_FILE, LARGE_GENERATED_FILE_1)
     print("Runned ZIPF experiment")
 
-    experiment_domain_specialization(model, mlog.model_config)
+    # experiment_domain_specialization(model, mlog.model_config)
     print("Runned domain experiment")
