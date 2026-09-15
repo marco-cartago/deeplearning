@@ -1,1 +1,4 @@
-pretrained/mamba-D512-E2.5-N16-d8.pth
+data/divina_commedia.txt
+data/petrarca.txt
+data/prompt.txt
+data/wikipedia.txt
