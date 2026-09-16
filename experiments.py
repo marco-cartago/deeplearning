@@ -176,7 +176,7 @@ def experiment_domain_specialization(model, config):
 
 if __name__ == "__main__":
     PKL_FILE = "./logs/mamba-D512-E2.5-N16-d8_cartago.pkl"
-    PTH_FILE = "./pretrained/mamba-D512-E2.5-N16-d8_cartago.pth"
+    PTH_FILE = "./pretrained/mamba-D512-E2.5-N16-d8.pth"
     DANTE_TEXT_FILE = "data/divina_commedia.txt"
     LARGE_GENERATED_FILE_1 = "data/experiment_large_genv1.txt"
     LARGE_GENERATED_FILE_2 = "data/experiment_large_genv2.txt"
@@ -197,5 +197,5 @@ if __name__ == "__main__":
     experiment_zipf(DANTE_TEXT_FILE, LARGE_GENERATED_FILE_1)
     print("Runned ZIPF experiment")
 
-    # experiment_domain_specialization(model, mlog.model_config)
+    experiment_domain_specialization(model, mlog.model_config)
     print("Runned domain experiment")

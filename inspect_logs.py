@@ -31,4 +31,13 @@ if __name__ == '__main__':
     logfile = args.file
     plot_lims = list(map(int, (args.plot.split(','))))
     modellog = load_log(logfile)
-    plot_loss_history(modellog, start=plot_lims[0], stop=plot_lims[1])
+    # plot_loss_history(modellog, start=plot_lims[0], stop=plot_lims[1])
+    c = modellog.model_config
+
+    print(f"{c.vocab_size = } ({c.charset_file})")
+    print(f"{c.d_conv = }")
+    print(f"{c.d_model = }")
+    print(f"{c.d_inner = }")
+    print(f"{c.dt_rank = }")
+    print(f"{c.d_state = }")
+    print(f"{c.n_layers = }")
