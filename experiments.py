@@ -130,6 +130,7 @@ def experiment_zipf(original_text_path, gen_text_path, save_path="./figures/zipf
     plt.ylabel("Frequency")
     plt.legend()
     plt.grid(True, which="both", ls="--", alpha=0.5)
+    plt.tight_layout()
     plt.savefig(save_path)
 
 
