@@ -91,10 +91,12 @@ def experiment_ngrams(original_text_path, gen_text_path, n=3,
         ax.set_xticks(y)
         ax.set_xticklabels(keys)
         # ax.invert_yaxis()  # Highest frequency trigram at the top
-        ax.set_xlabel(f'Frequency per 1,000 {n}-grams')
+        ax.set_xlabel(f"{n}-grams")
+        ax.set_ylabel(f'Frequency (‰)')
         ax.set_title(f'Top 12 {n}-Grams Comparison (Original vs. Generated)')
         ax.legend()
         plt.tight_layout()
+        # plt.show()
         plt.savefig(save_path)
 
 
