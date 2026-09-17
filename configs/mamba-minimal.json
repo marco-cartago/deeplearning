@@ -1,8 +1,9 @@
 {
     "charset": "dictionaries/minimal_dict.txt",
-    "d_model": 256,
+    "d_model": 128,
     "d_state": 8,
-    "expand_factor": 2,
+    "expand_factor": 2.0,
     "d_conv": 4,
+    "dt_rank": 4,
     "n_layers": 4
 }
